@@ -400,17 +400,6 @@ export default {
       this.handleClearAll(ids);
       this.curShowList = this.getShowList();
     },
-    /**
-     * @description 对外提供一个插槽，满足易直投区域定向lbs选择数据后切换到级联选择器中也能展示
-     */
-    renderSlot() {
-      if (!this.$slots.selectPanel || !this.$slots.selectPanel.length) {
-        return;
-      }
-      return this.$slots.selectPanel.map((item, index) => {
-        return item;
-      });
-    },
     getShowList() {
       return new Array(this.maxLevel).fill().map((item, index) => {
         let isShow = this.isCollapse ? (index === 0 ? true : false) : true;
