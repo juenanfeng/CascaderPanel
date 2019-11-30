@@ -1,11 +1,12 @@
 <script>
 import { flattenData } from "./util";
 import CascaderItem from "./panelItem";
+import CascaderSearch from "./searchPanel";
 import Node from "./model/node";
 import SelectPanel from "components/SelectPanel";
 
 export default {
-  components: { CascaderItem, SelectPanel },
+  components: { CascaderItem, CascaderSearch, SelectPanel },
   name: "CascaderPanel",
   props: {
     data: {
@@ -14,7 +15,7 @@ export default {
     },
     props: {
       type: Object,
-      default: function() {
+      default() {
         return {
           key: "id",
           label: "label"
@@ -36,13 +37,37 @@ export default {
     isSingle: {
       type: Boolean,
       default: false
+    },
+    isSearch: {
+      type: Boolean,
+      default: false
+    },
+    isCollapse: {
+      type: Boolean,
+      default: false
+    },
+    disabled: {
+      type: Boolean,
+      default: false
+    },
+    keyword: {
+      type: String
+    },
+    customKeywordMethod: {
+      type: Function
+    },
+    customFilterMethod: {
+      type: Function
+    },
+    formatterSelectText: {
+      type: Function
     }
   },
   render(h) {
     let data = this.rootNode.childNodes;
     return (
       <div class="cascader-panel">
-        <div class="cascader-panel__select">
+        <div class="cascader-panel__select" v-show={!this.keyword}>
           {this.curSelectData.map((item, index) => {
             const {
               level,
@@ -52,7 +77,14 @@ export default {
             } = this.settings.find(item => item.level === index + 1);
             return this.curShowList[index] ? (
               <CascaderItem
+                style={{
+                  width: `calc(100% / ${
+                    this.curShowList.filter(c => c).length
+                  })`
+                }}
                 key={index}
+                disabled={this.disabled}
+                isSearch={this.isSearch}
                 data={item}
                 title={title}
                 level={level}
@@ -67,12 +99,31 @@ export default {
             ) : null;
           })}
         </div>
-        <SelectPanel
-          class="cascader-panel__choosen"
-          data={this.checkedData}
-          on-clear-all={this.handleClearAll}
-          on-remove={this.handleRemoveItem}
-        />
+        <div class="cascader-panel__select" v-show={this.keyword}>
+          <cascader-search
+            data={this.searchData}
+            keyword={this.keyword}
+            on-check={this.handleCheck}
+            on-check-all={(checked, ids) =>
+              this.handleSearchAllCheck(checked, ids)
+            }
+          />
+        </div>
+        {this.$scopedSlots.select ? (
+          this.$scopedSlots.select({
+            data: this.wholeCheckedData,
+            remove: this.handleRemoveItem,
+            clearAll: this.handleClearAll
+          })
+        ) : (
+          <SelectPanel
+            class="cascader-panel__choosen"
+            data={this.wholeCheckedData}
+            disabled={this.disabled}
+            on-clear-all={this.handleClearAll}
+            on-remove={this.handleRemoveItem}
+          />
+        )}
         {this.renderSlot()}
       </div>
     );
@@ -80,6 +131,8 @@ export default {
   data() {
     return {
       rootNode: null,
+      searchData: [],
+      lastCheckedData: [],
       flattenData: [],
       curShowList: [],
       checkedData: []
@@ -89,23 +142,24 @@ export default {
     data: {
       deep: true,
       handler() {
-        this.rootNode = new Node({
-          data: this.data,
-          props: this.props
-        });
-        this.flattenData = flattenData(this.rootNode);
-        this.curShowList = new Array(this.maxLevel)
-          .fill()
-          .map((item, index) => {
-            let isShow = index === 0 ? true : false;
-            return isShow;
-          });
+        this.init();
+
+        if (!this.isSearch) {
+          this.checkedData = [];
+        } else {
+          //搜索模式下,先把之前的选择结果存起来
+          this.lastCheckedData.push(...this.checkedData);
+          this.checkedData = [];
+        }
       }
     },
     checkedData: {
       deep: true,
       handler(val, old) {
-        this.$emit("result-change", val);
+        const wholeData = this.flattenData.filter(
+          p => p.checked || p.noChildChecked
+        );
+        this.$emit("result-change", val, wholeData);
       }
     }
   },
@@ -113,6 +167,25 @@ export default {
     maxLevel() {
       return this.settings.length;
     },
+    wholeCheckedData() {
+      if (!this.isSearch) {
+        return this.checkedData;
+      }
+
+      const result = [];
+      this.checkedData.forEach(curCheckedData => {
+        const id = curCheckedData.data[this.props.key];
+        const index = this.lastCheckedData.findIndex(
+          p => p.data[this.props.key] === id
+        );
+        if (index > -1) {
+          //如果在上一次的选择中已经选择过,则去掉这个结果
+          this.lastCheckedData.splice(index, 1);
+        }
+      });
+      return this.lastCheckedData.concat(this.checkedData);
+    },
+    //获取每一级的数据
     curSelectData() {
       const result = [];
       let data = this.rootNode;
@@ -126,20 +199,36 @@ export default {
         let selectNode = data.childNodes.find(item => item.selected) || [];
         data = selectNode;
       }
+
+      //console.log("当前选中数组", result);
       return result;
     }
   },
   created() {
-    this.rootNode = new Node({
-      data: this.data,
-      props: this.props
-    });
-    this.flattenData = flattenData(this.rootNode);
-    //console.log(this.flattenData);
-    this.curShowList = new Array(this.maxLevel).fill().map((item, index) => {
-      let isShow = index === 0 ? true : false;
-      return isShow;
-    });
+    this.init();
+    this.$watch(
+      "keyword",
+      //模糊搜索,debounce
+      this.$root._.debounce(async val => {
+        let filterMethod = node => {
+          return node.text && node.text.includes(val);
+        };
+        //自定义搜索，目前需要返回原始数据的id集合用来做筛选
+        if (this.customKeywordMethod) {
+          const needCustomFilter = this.customKeywordMethod(val);
+          if (needCustomFilter) {
+            const ids = await this.customFilterMethod(val);
+            filterMethod = node => {
+              return ids.includes(node.data[this.props.key]);
+            };
+          }
+        }
+
+        this.searchData = val
+          ? this.flattenData.filter(node => filterMethod(node))
+          : [];
+      })
+    );
   },
   methods: {
     handleSelect(id) {
@@ -149,7 +238,7 @@ export default {
       selectNode.selected = true;
 
       //下一级展示出来,更深的层级不渲染
-      if (selectNode.level < this.maxLevel) {
+      if (selectNode.level < this.maxLevel && this.isCollapse) {
         this.curShowList[selectNode.level] = !!selectNode.childNodes.length;
         for (let i = selectNode.level + 1; i < this.maxLevel; i++) {
           this.curShowList[i] = false;
@@ -160,18 +249,26 @@ export default {
         this.flattenData.forEach(p => (p.checked = false));
         this.getCheckedData();
       }
+
+      this.$emit("select", selectNode);
+      //console.log("handleSelect", id);
     },
     handleCheck(isCheck, id, immediate = true) {
       const checkedLevel = this.checkedLevel;
       //勾选当前级别及子级
       let selectNode = this.flattenData.find(item => item.id === id);
       if (!selectNode) {
+        //找不到去lastData里找
+        const index = this.lastCheckedData.findIndex(item => item.id === id);
+        this.lastCheckedData.splice(index, 1);
         return;
       }
+
       //递归
       //由父到子
       function setCheck(node) {
         node.checked = isCheck;
+        node.indeterminate = false;
         if (!node.childNodes.length && node.level < checkedLevel) {
           node.noChildChecked = isCheck;
         }
@@ -187,9 +284,18 @@ export default {
         if (!parent || !parent.parent) {
           return;
         }
-        parent.checked = parent.childNodes.every(child => {
-          return child.checked === true;
-        });
+        const validChildren = parent.childNodes.filter(p => !p.disabled);
+        const checked = validChildren.length
+          ? validChildren.every(p => p.checked)
+          : false;
+        const totalNum = parent.childNodes.length;
+        const checkedNum = parent.childNodes.reduce((c, p) => {
+          const num = p.checked ? 1 : p.indeterminate ? 0.5 : 0;
+          return c + num;
+        }, 0);
+
+        parent.checked = checked;
+        parent.indeterminate = checkedNum !== totalNum && checkedNum > 0;
         setParentCheck(parent.parent);
       }
 
@@ -198,25 +304,23 @@ export default {
       if (immediate) {
         this.getCheckedData();
       }
+      //console.log("handleCheck", isCheck, id);
     },
     handleAllCheck(isCheck, parentId, index) {
       //console.log("触发全选");
       const selectNode = this.flattenData.find(item => item.id === parentId);
-      // 第一级全选性能优化
-      if (index === 0) {
-        this.flattenData.forEach(p => (p.checked = isCheck));
-        if (isCheck) {
-          this.checkedData = this.flattenData.filter(p => p.level === 1);
-        } else {
-          this.checkedData = [];
-        }
-      } else {
-        selectNode.checked = isCheck;
-        selectNode.childNodes.forEach(item => {
-          this.handleCheck(isCheck, item.id, false);
-        });
+      selectNode.checked = isCheck;
+      selectNode.childNodes.forEach(item => {
+        this.handleCheck(isCheck, item.id, false);
+      });
+      this.getCheckedData();
+    },
+    //处理搜索出来的结果的全选
+    handleSearchAllCheck(isCheck, ids) {
+      ids.forEach(id => {
+        this.handleCheck(isCheck, id, false);
         this.getCheckedData();
-      }
+      });
     },
     getCheckedData() {
       //压缩数据 一级一级压缩
@@ -234,7 +338,17 @@ export default {
         noSelectData.forEach(p => step(p.childNodes));
       }
       step(toZipData);
-      this.checkedData = result;
+      //console.log(result, "压缩过后的数据");
+      this.checkedData = result.map(item => {
+        return {
+          ...item,
+          text: this.formatterSelectText
+            ? this.formatterSelectText(item)
+            : item.text
+        };
+      });
+      //不开启压缩
+      //this.checkedData = this.flattenData.filter(p => p.checked || p.noChildChecked)
     },
     handleRemoveItem(id) {
       this.handleCheck(false, id);
@@ -245,6 +359,7 @@ export default {
       });
     },
     setCheckedNode(key, immediate = true) {
+      /* public API */
       const selectNode = this.flattenData.find(
         item => item.data[this.props.key] === key
       );
@@ -253,7 +368,6 @@ export default {
       }
     },
     setCheckedNodes(keys) {
-      /* public API */
       keys.forEach(key => {
         this.setCheckedNode(key, false);
       });
@@ -267,7 +381,8 @@ export default {
             id: item.id,
             text: item.text,
             data: item.data,
-            level: item.level
+            level: item.level,
+            parent: item.parent
           };
         });
       } else {
@@ -283,10 +398,40 @@ export default {
         )
         .map(p => p.id);
       this.handleClearAll(ids);
-      this.curShowList = new Array(this.maxLevel).fill().map((item, index) => {
-        let isShow = index === 0 ? true : false;
+      this.curShowList = this.getShowList();
+    },
+    /**
+     * @description 对外提供一个插槽，满足易直投区域定向lbs选择数据后切换到级联选择器中也能展示
+     */
+    renderSlot() {
+      if (!this.$slots.selectPanel || !this.$slots.selectPanel.length) {
+        return;
+      }
+      return this.$slots.selectPanel.map((item, index) => {
+        return item;
+      });
+    },
+    getShowList() {
+      return new Array(this.maxLevel).fill().map((item, index) => {
+        let isShow = this.isCollapse ? (index === 0 ? true : false) : true;
         return isShow;
       });
+    },
+    init() {
+      this.rootNode = new Node({
+        data: this.data,
+        props: this.props
+      });
+      this.flattenData = flattenData(this.rootNode);
+      this.curShowList = this.getShowList();
+
+      // if (!this.isCollapse) {
+      //   let node = this.rootNode;
+      //   while (node && node.childNodes) {
+      //     node.selected = true;
+      //     node = node.childNodes[0];
+      //   }
+      // }
     }
   }
 };
@@ -296,21 +441,21 @@ $prefix: "cascader";
 
 .#{$prefix}-panel {
   display: flex;
-  background: #fff;
   height: 300px;
 }
 
 .#{$prefix}-panel__select {
   display: flex;
-  flex: 2;
+  flex: 47;
+  border: 1px solid #dddee1;
+  border-radius: 4px;
+  margin-right: 20px;
+  background: #fff;
+  overflow-x: hidden;
 }
 
 .#{$prefix}-panel__choosen {
-  flex: 1;
-}
-
-.#{$prefix}-panel-item {
-  flex: 1;
-  overflow-y: auto;
+  flex: 18;
+  min-width: 180px;
 }
 </style>
