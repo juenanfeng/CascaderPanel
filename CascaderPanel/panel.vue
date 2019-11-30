@@ -3,7 +3,7 @@ import { flattenData } from "./util";
 import CascaderItem from "./panelItem";
 import CascaderSearch from "./searchPanel";
 import Node from "./model/node";
-import SelectPanel from "components/SelectPanel";
+import SelectPanel from "./selectPanel";
 
 export default {
   components: { CascaderItem, CascaderSearch, SelectPanel },

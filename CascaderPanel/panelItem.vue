@@ -4,7 +4,7 @@
     <div class="cascader-panel-item__content">
         <slot name="empty" v-if="!data.length && level === 1 && isSearch">
             <div class="empty-slot-wrapper">
-                <img src="../../assets/images/cas-empty.png">
+                <!-- <img src="../../assets/images/cas-empty.png"> -->
                 <span>无搜索内容</span>
             </div>
         </slot>
